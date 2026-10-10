@@ -1,193 +1,211 @@
+const vscode = require('vscode');
+const fs = require('fs');
+const path = require('path');
 
-   const vscode = require('vscode');
-   const fs = require('fs');
-   const path = require('path');
+let fileCache = new Map();
 
-   function activate(context) {
-       // 1. Провайдер перехода к определению (Go to Definition)
-       const definitionProvider = vscode.languages.registerDefinitionProvider('python', {
-           async provideDefinition(document, position, token) {
-               const range = document.getWordRangeAtPosition(position, /[a-zA-Z0-9_:]+/);
-               if (!range) return null;
+function activate(context) {
+    vscode.workspace.onDidSaveTextDocument(() => {
+        fileCache.clear();
+    });
 
-               const word = document.getText(range).replace(/^:/, '');
-               const workspaceFolders = vscode.workspace.workspaceFolders;
-               if (!workspaceFolders) return null;
+    // 1. Провайдер перехода к определению (Go to Definition)
+    const definitionProvider = vscode.languages.registerDefinitionProvider('python', {
+        async provideDefinition(document, position, token) {
+            const range = document.getWordRangeAtPosition(position, /[a-zA-Z0-9_:]+/);
+            if (!range) return null;
 
-               const rootPath = workspaceFolders[0].uri.fsPath;
-               const files = getPythonFiles(rootPath);
+            const word = document.getText(range).replace(/^:/, '');
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            if (!workspaceFolders) return null;
 
-               for (const filePath of files) {
-                   const content = fs.readFileSync(filePath, 'utf-8');
-                   const lines = content.split(/\r?\n/);
+            const rootPath = workspaceFolders[0].uri.fsPath;
+            const files = getPythonFiles(rootPath);
 
-                   for (let i = 0; i < lines.length; i++) {
-                       const line = lines[i];
-                       const trimmed = line.trim();
-                       if (trimmed.startsWith('#')) continue;
+            for (const filePath of files) {
+                let content = fileCache.get(filePath);
+                if (!content) {
+                    try {
+                        content = fs.readFileSync(filePath, 'utf-8');
+                        fileCache.set(filePath, content);
+                    } catch (e) {
+                        continue;
+                    }
+                }
 
-                       if (path.basename(filePath) === 'module_game_menus.py') {
-                           const regex = new RegExp(`['"]${word}['"]\\s*,`, 'i');
-                           if (!regex.test(trimmed)) continue;
+                const lines = content.split(/\r?\n/);
+                for (let i = 0; i < lines.length; i++) {
+                    const line = lines[i];
+                    const trimmed = line.trim();
+                    if (trimmed.startsWith('#')) continue;
 
-                           // Проверяем текущую и следующую строку на предмет опции меню (если после запятой идет [)
-                           let nextLine = (i + 1 < lines.length) ? lines[i + 1].trim() : '';
-                           let combined = trimmed + ' ' + nextLine;
-                           if (/['"][\w_]+['"]\s*,\s*\[/.test(combined) || nextLine.startsWith('[')) {
-                               continue; // Это опция меню, пропускаем
-                           }
+                    if (path.basename(filePath) === 'module_game_menus.py') {
+                        const regex = new RegExp(`['"]${word}['"]\\s*,`, 'i');
+                        if (!regex.test(trimmed)) continue;
 
-                           const targetUri = vscode.Uri.file(filePath);
-                           const targetPosition = new vscode.Position(i, line.indexOf(word));
-                           return new vscode.Location(targetUri, targetPosition);
-                       }
+                        let nextLine = (i + 1 < lines.length) ? lines[i + 1].trim() : '';
+                        let combined = trimmed + ' ' + nextLine;
+                        if (/['"][\w_]+['"]\s*,\s*\[/.test(combined) || nextLine.startsWith('[')) {
+                            continue;
+                        }
 
-                       const entityRegex = new RegExp(`^\\s*[\\(\\[]\\s*['"]${word}['"]\\s*,`, 'i');
-                       const varRegex = new RegExp(`^\\s*${word}\\s*=`, 'i');
-                       const localDefRegex = new RegExp(`(:|l\\.)${word}\\b`, 'i');
+                        const targetUri = vscode.Uri.file(filePath);
+                        const targetPosition = new vscode.Position(i, line.indexOf(word));
+                        return new vscode.Location(targetUri, targetPosition);
+                    }
 
-                       if (entityRegex.test(line) || varRegex.test(line) || localDefRegex.test(line)) {
-                           const targetUri = vscode.Uri.file(filePath);
-                           const targetPosition = new vscode.Position(i, line.indexOf(word));
-                           return new vscode.Location(targetUri, targetPosition);
-                       }
-                   }
-               }
-               return null;
-           }
-       });
+                    const entityRegex = new RegExp(`^\\s*[\\(\\[]\\s*['"]${word}['"]\\s*,`, 'i');
+                    const varRegex = new RegExp(`^\\s*${word}\\s*=`, 'i');
+                    const localDefRegex = new RegExp(`(:|l\\.)${word}\\b`, 'i');
 
-                       // 2. Контекстное автодополнение
-                       const completionProvider = vscode.languages.registerCompletionItemProvider('python', {
-                           provideCompletionItems(document, position, token, context) {
-                               const workspaceFolders = vscode.workspace.workspaceFolders;
-                               if (!workspaceFolders) return [];
+                    if (entityRegex.test(line) || varRegex.test(line) || localDefRegex.test(line)) {
+                        const targetUri = vscode.Uri.file(filePath);
+                        const targetPosition = new vscode.Position(i, line.indexOf(word));
+                        return new vscode.Location(targetUri, targetPosition);
+                    }
+                }
+            }
+            return null;
+        }
+    });
 
-                               const linePrefix = document.lineAt(position).text.substr(0, position.character);
-                               const completions = [];
-                               const seen = new Set();
+                    // 2. Контекстное автодополнение
+                    const completionProvider = vscode.languages.registerCompletionItemProvider('python', {
+                        provideCompletionItems(document, position, token, context) {
+                            const workspaceFolders = vscode.workspace.workspaceFolders;
+                            if (!workspaceFolders) return [];
 
-                               const isLocal = /(?:l\.|:)\s*[\w]*$/.test(linePrefix);
-                               if (isLocal) {
-                                   const localVars = getLocalVariablesInCurrentScope(document.getText(), position.line);
-                                   for (const v of localVars) {
-                                       if (!seen.has(v)) {
-                                           seen.add(v);
-                                           const item = new vscode.CompletionItem(v, vscode.CompletionItemKind.Variable);
-                                           item.detail = 'Local Variable';
-                                           completions.push(item);
-                                       }
-                                   }
-                                   return completions;
-                               }
+                            const linePrefix = document.lineAt(position).text.substr(0, position.character);
+                            const completions = [];
+                            const seen = new Set();
 
-                               let targetFileName = null;
-                               if (/script\.\s*([\w]*)$/.test(linePrefix)) targetFileName = 'module_scripts.py';
-                               else if (/trp\.\s*([\w]*)$/.test(linePrefix)) targetFileName = 'module_troops.py';
-                               else if (/itm\.\s*([\w]*)$/.test(linePrefix)) targetFileName = 'module_items.py';
-                               else if (/mnu\.\s*([\w]*)$/.test(linePrefix)) targetFileName = 'module_game_menus.py';
-                               else if (/fac\.\s*([\w]*)$/.test(linePrefix)) targetFileName = 'module_factions.py';
-                               else if (/scn\.\s*([\w]*)$/.test(linePrefix)) targetFileName = 'module_scenes.py';
-                               else if (/qst\.\s*([\w]*)$/.test(linePrefix)) targetFileName = 'module_quests.py';
-                               else if (/snd\.\s*([\w]*)$/.test(linePrefix)) targetFileName = 'module_sounds.py';
-                               else if (/prsnt\.\s*([\w]*)$/.test(linePrefix)) targetFileName = 'module_presentations.py';
+                            const isLocal = /(?:l\.|:)\s*[\w]*$/.test(linePrefix);
+                            if (isLocal) {
+                                const localVars = getLocalVariablesInCurrentScope(document.getText(), position.line);
+                                for (const v of localVars) {
+                                    if (!seen.has(v)) {
+                                        seen.add(v);
+                                        const item = new vscode.CompletionItem(v, vscode.CompletionItemKind.Variable);
+                                        item.detail = 'Local Variable';
+                                        completions.push(item);
+                                    }
+                                }
+                                return completions;
+                            }
 
-                               if (!targetFileName) {
-                                   return [];
-                               }
+                            let targetFileName = null;
+                            if (/script\.\s*([\w]*)$/.test(linePrefix)) targetFileName = 'module_scripts.py';
+                            else if (/trp\.\s*([\w]*)$/.test(linePrefix)) targetFileName = 'module_troops.py';
+                            else if (/itm\.\s*([\w]*)$/.test(linePrefix)) targetFileName = 'module_items.py';
+                            else if (/mnu\.\s*([\w]*)$/.test(linePrefix)) targetFileName = 'module_game_menus.py';
+                            else if (/fac\.\s*([\w]*)$/.test(linePrefix)) targetFileName = 'module_factions.py';
+                            else if (/scn\.\s*([\w]*)$/.test(linePrefix)) targetFileName = 'module_scenes.py';
+                            else if (/qst\.\s*([\w]*)$/.test(linePrefix)) targetFileName = 'module_quests.py';
+                            else if (/snd\.\s*([\w]*)$/.test(linePrefix)) targetFileName = 'module_sounds.py';
+                            else if (/prsnt\.\s*([\w]*)$/.test(linePrefix)) targetFileName = 'module_presentations.py';
 
-                               const rootPath = workspaceFolders[0].uri.fsPath;
-                               const files = getPythonFiles(rootPath);
+                            if (!targetFileName) {
+                                return [];
+                            }
 
-                               for (const filePath of files) {
-                                   if (path.basename(filePath) !== targetFileName) {
-                                       continue;
-                                   }
+                            const rootPath = workspaceFolders[0].uri.fsPath;
+                            const files = getPythonFiles(rootPath);
 
-                                   try {
-                                       const content = fs.readFileSync(filePath, 'utf-8');
-                                       const lines = content.split(/\r?\n/);
+                            for (const filePath of files) {
+                                if (path.basename(filePath) !== targetFileName) {
+                                    continue;
+                                }
 
-                                       for (let i = 0; i < lines.length; i++) {
-                                           const line = lines[i];
-                                           const trimmed = line.trim();
-                                           if (trimmed.startsWith('#')) continue;
+                                let content = fileCache.get(filePath);
+                                if (!content) {
+                                    try {
+                                        content = fs.readFileSync(filePath, 'utf-8');
+                                        fileCache.set(filePath, content);
+                                    } catch (e) {
+                                        continue;
+                                    }
+                                }
 
-                                           let match = null;
-                                           if (path.basename(filePath) === 'module_game_menus.py') {
-                                               const menuMatch = trimmed.match(/['"]([a-zA-Z0-9_]+)['"]\s*,/);
-                                               if (menuMatch && menuMatch[1]) {
-                                                   let nextLine = (i + 1 < lines.length) ? lines[i + 1].trim() : '';
-                                                   let combined = trimmed + ' ' + nextLine;
-                                                   if (/['"][\w_]+['"]\s*,\s*\[/.test(combined) || nextLine.startsWith('[')) {
-                                                       continue; // Пропускаем опцию меню
-                                                   }
-                                                   match = menuMatch;
-                                               }
-                                           } else {
-                                               match = trimmed.match(/^[\(\[]\s*['"]([a-zA-Z0-9_]+)['"]\s*,/) || trimmed.match(/^([a-zA-Z0-9_]+)\s*=/);
-                                           }
+                                const lines = content.split(/\r?\n/);
+                                for (let i = 0; i < lines.length; i++) {
+                                    const line = lines[i];
+                                    const trimmed = line.trim();
+                                    if (trimmed.startsWith('#')) continue;
 
-                                           if (match && match[1]) {
-                                               const name = match[1];
-                                               if (!seen.has(name)) {
-                                                   seen.add(name);
-                                                   completions.push(new vscode.CompletionItem(name, vscode.CompletionItemKind.Reference));
-                                               }
-                                           }
-                                       }
-                                   } catch (e) {}
-                               }
+                                    let match = null;
+                                    if (path.basename(filePath) === 'module_game_menus.py') {
+                                        const menuMatch = trimmed.match(/['"]([a-zA-Z0-9_]+)['"]\s*,/);
+                                        if (menuMatch && menuMatch[1]) {
+                                            let nextLine = (i + 1 < lines.length) ? lines[i + 1].trim() : '';
+                                            let combined = trimmed + ' ' + nextLine;
+                                            if (/['"][\w_]+['"]\s*,\s*\[/.test(combined) || nextLine.startsWith('[')) {
+                                                continue;
+                                            }
+                                            match = menuMatch;
+                                        }
+                                    } else {
+                                        match = trimmed.match(/^[\(\[]\s*['"]([a-zA-Z0-9_]+)['"]\s*,/) || trimmed.match(/^([a-zA-Z0-9_]+)\s*=/);
+                                    }
 
-                               return completions;
-                           }
-                       }, '.', ':', '"', "'");
+                                    if (match && match[1]) {
+                                        const name = match[1];
+                                        if (!seen.has(name)) {
+                                            seen.add(name);
+                                            completions.push(new vscode.CompletionItem(name, vscode.CompletionItemKind.Reference));
+                                        }
+                                    }
+                                }
+                            }
 
-                                               context.subscriptions.push(definitionProvider, completionProvider);
-   }
+                            return completions;
+                        }
+                    }, '.', ':', '"', "'");
 
-   function getLocalVariablesInCurrentScope(documentText, cursorLine) {
-       const lines = documentText.split(/\r?\n/);
-       const locals = new Set();
-       const start = Math.max(0, cursorLine - 100);
-       const end = Math.min(lines.length, cursorLine + 50);
-       const regex = /(?::|l\.)([a-zA-Z0-9_]+)\b/g;
+                                        context.subscriptions.push(definitionProvider, completionProvider);
+}
 
-       for (let i = start; i < end; i++) {
-           let match;
-           while ((match = regex.exec(lines[i])) !== null) {
-               locals.add(match[1], start); // keep type
-           }
-       }
-       return Array.from(locals);
-   }
+function getLocalVariablesInCurrentScope(documentText, cursorLine) {
+    const lines = documentText.split(/\r?\n/);
+    const locals = new Set();
+    const start = Math.max(0, cursorLine - 100);
+    const end = Math.min(lines.length, cursorLine + 50);
+    const regex = /(?::|l\.)([a-zA-Z0-9_]+)\b/g;
 
-   function getPythonFiles(dir, fileList = []) {
-       const files = fs.readdirSync(dir);
-       for (const file of files) {
-           const filePath = path.join(dir, file);
-           if (
-               filePath.includes('node_modules') ||
-               filePath.includes('.git') ||
-               filePath.includes('build') ||
-               filePath.endsWith('compiler.py') ||
-               file.startsWith('ID_')
-           ) {
-               continue;
-           }
+    for (let i = start; i < end; i++) {
+        let match;
+        while ((match = regex.exec(lines[i])) !== null) {
+            locals.add(match[1]);
+        }
+    }
+    return Array.from(locals);
+}
 
-           if (fs.statSync(filePath).isDirectory()) {
-               getPythonFiles(filePath, fileList);
-           } else if (file.endsWith('.py')) {
-               fileList.push(filePath);
-           }
-       }
-       return fileList;
-   }
+function getPythonFiles(dir, fileList = []) {
+    const files = fs.readdirSync(dir);
+    for (const file of files) {
+        const filePath = path.join(dir, file);
+        if (
+            filePath.includes('node_modules') ||
+            filePath.includes('.git') ||
+            filePath.includes('build') ||
+            filePath.endsWith('compiler.py') ||
+            file.startsWith('ID_')
+        ) {
+            continue;
+        }
 
-   function deactivate() {}
+        if (fs.statSync(filePath).isDirectory()) {
+            getPythonFiles(filePath, fileList);
+        } else if (file.endsWith('.py')) {
+            fileList.push(filePath);
+        }
+    }
+    return fileList;
+}
 
-   module.exports = {
-       activate,
-       deactivate
-   };
+function deactivate() {}
+
+module.exports = {
+    activate,
+    deactivate
+};
