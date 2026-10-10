@@ -1,0 +1,12 @@
+{
+  "name": "WWD-Provider",
+  "displayName": "Warband WRECK Definition Provider",
+  "version": "1.0.0",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "activationEvents": [
+    "onLanguage:python"
+  ],
+  "main": "./extension.js"
+}
