@@ -1,3 +1,4 @@
+
 const vscode = require('vscode');
 const fs = require('fs');
 const path = require('path');
@@ -21,8 +22,11 @@ function activate(context) {
 
                 for (let i = 0; i < lines.length; i++) {
                     const line = lines[i];
-                    // Ищем паттерн объявления типа ("имя", [ или 'имя', [
-                    const regex = new RegExp(`^\\s*\\(\\s*['"]${word}['"]\\s*,`, 'i');
+                    const trimmed = line.trim();
+                    if (trimmed.startsWith('#')) continue;
+
+                    // Ищем объявление как в круглых (...), так и в квадратных [...] скобках
+                    const regex = new RegExp(`^\\s*[\\(\\[]\\s*['"]${word}['"]\\s*,`, 'i');
                     if (regex.test(line)) {
                         const targetUri = vscode.Uri.file(filePath);
                         const targetPosition = new vscode.Position(i, line.indexOf(word));
@@ -63,3 +67,4 @@ module.exports = {
     activate,
     deactivate
 };
+

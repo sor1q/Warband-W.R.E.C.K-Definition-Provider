@@ -1,5 +1,5 @@
 {
-  "name": "WWD-Provider",
+  "name": "wwd-provider",
   "displayName": "Warband WRECK Definition Provider",
   "version": "1.0.0",
   "engines": {
