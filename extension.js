@@ -1,4 +1,3 @@
-
    const vscode = require('vscode');
    const fs = require('fs');
    const path = require('path');
@@ -10,7 +9,7 @@
            fileCache.clear();
        });
 
-       // 1. Провайдер перехода к определению (Go to Definition)
+       // 1. Провайдер перехода к определению (Go to Definition с фильтрацией по префиксам)
        const definitionProvider = vscode.languages.registerDefinitionProvider('python', {
            async provideDefinition(document, position, token) {
                const lineText = document.lineAt(position.line).text;
@@ -24,9 +23,42 @@
                if (!workspaceFolders) return null;
 
                const rootPath = workspaceFolders[0].uri.fsPath;
+
+               // Определяем префикс по тексту слева от слова
+               const textBeforeWord = lineText.substring(0, range.start.character);
+               let targetFileNames = [];
+
+               if (/script\.\s*$/i.test(textBeforeWord)) {
+                   targetFileNames = ['module_scripts.py', 'ID_scripts.py'];
+               } else if (/trp\.\s*$/i.test(textBeforeWord)) {
+                   targetFileNames = ['module_troops.py', 'ID_troops.py'];
+               } else if (/itm\.\s*$/i.test(textBeforeWord)) {
+                   targetFileNames = ['module_items.py', 'ID_items.py'];
+               } else if (/p\.\s*$/i.test(textBeforeWord)) {
+                   targetFileNames = ['module_parties.py', 'ID_parties.py'];
+               } else if (/mnu\.\s*$/i.test(textBeforeWord)) {
+                   targetFileNames = ['module_game_menus.py', 'ID_menus.py'];
+               } else if (/fac\.\s*$/i.test(textBeforeWord)) {
+                   targetFileNames = ['module_factions.py', 'ID_factions.py'];
+               } else if (/scn\.\s*$/i.test(textBeforeWord)) {
+                   targetFileNames = ['module_scenes.py', 'ID_scenes.py'];
+               } else if (/qst\.\s*$/i.test(textBeforeWord)) {
+                   targetFileNames = ['module_quests.py', 'ID_quests.py'];
+               } else if (/snd\.\s*$/i.test(textBeforeWord)) {
+                   targetFileNames = ['module_sounds.py', 'ID_sounds.py'];
+               } else if (/prsnt\.\s*$/i.test(textBeforeWord)) {
+                   targetFileNames = ['module_presentations.py', 'ID_presentations.py'];
+               }
+
                const files = getPythonFiles(rootPath, true);
 
                for (const filePath of files) {
+                   const fileName = path.basename(filePath);
+
+                   if (targetFileNames.length > 0 && !targetFileNames.includes(fileName)) {
+                       continue;
+                   }
+
                    let content = fileCache.get(filePath);
                    if (!content) {
                        try {
@@ -73,209 +105,213 @@
            }
        });
 
-                       // 2. Контекстное автодополнение
-                       const completionProvider = vscode.languages.registerCompletionItemProvider('python', {
-                           provideCompletionItems(document, position, token, context) {
-                               const workspaceFolders = vscode.workspace.workspaceFolders;
-                               if (!workspaceFolders) return [];
+       // 2. Контекстное автодополнение
+       const completionProvider = vscode.languages.registerCompletionItemProvider('python', {
+           provideCompletionItems(document, position, token, context) {
+               const workspaceFolders = vscode.workspace.workspaceFolders;
+               if (!workspaceFolders) return [];
 
-                               const linePrefix = document.lineAt(position).text.substr(0, position.character);
-                               const completions = [];
-                               const seen = new Set();
-                               const rootPath = workspaceFolders[0].uri.fsPath;
+               const linePrefix = document.lineAt(position).text.substr(0, position.character);
+               const completions = [];
+               const seen = new Set();
+               const rootPath = workspaceFolders[0].uri.fsPath;
 
-                               // Автокомплит локальных переменных (l. или :)
-                               const isLocal = /(?:l\.|:)\s*[\w]*$/.test(linePrefix);
-                               if (isLocal) {
-                                   const localVars = getLocalVariablesInCurrentScope(document.getText(), position.line);
-                                   for (const v of localVars) {
-                                       if (!seen.has(v)) {
-                                           seen.add(v);
-                                           const item = new vscode.CompletionItem(v, vscode.CompletionItemKind.Variable);
-                                           item.detail = 'Local Variable';
-                                           completions.push(item);
-                                       }
+               // Автокомплит локальных переменных (l. или :)
+               const isLocal = /(?:l\.|:)\s*[\w]*$/.test(linePrefix);
+               if (isLocal) {
+                   const localVars = getLocalVariablesInCurrentScope(document.getText(), position.line);
+                   for (const v of localVars) {
+                       if (!seen.has(v)) {
+                           seen.add(v);
+                           const item = new vscode.CompletionItem(v, vscode.CompletionItemKind.Variable);
+                           item.detail = 'Local Variable';
+                           completions.push(item);
+                       }
+                   }
+                   return completions;
+               }
+
+               // Автокомплит глобальных переменных (срабатывает строго при вводе g.)
+               const isGlobal = /g\.\s*[\w]*$/.test(linePrefix);
+               if (isGlobal) {
+                   const globalVars = getAllGlobalVariables(rootPath);
+                   for (const gVar of globalVars) {
+                       let cleanVar = gVar;
+                       if (cleanVar.startsWith('$g_')) cleanVar = cleanVar.substring(3);
+                       else if (cleanVar.startsWith('g_')) cleanVar = cleanVar.substring(2);
+                       else if (cleanVar.startsWith('$')) cleanVar = cleanVar.substring(1);
+
+                       if (!seen.has(cleanVar)) {
+                           seen.add(cleanVar);
+                           const item = new vscode.CompletionItem(cleanVar, vscode.CompletionItemKind.Variable);
+                           item.detail = 'Global Variable';
+                           completions.push(item);
+                       }
+                   }
+                   return completions;
+               }
+
+               // Определяем целевой файл по префиксу сущности
+               let targetFileNames = [];
+               let stripPrefix = null;
+
+               if (/script\.\s*([\w]*)$/.test(linePrefix)) {
+                   targetFileNames = ['module_scripts.py'];
+               } else if (/trp\.\s*([\w]*)$/.test(linePrefix)) {
+                   targetFileNames = ['module_troops.py', 'ID_troops.py'];
+                   stripPrefix = 'trp_';
+               } else if (/itm\.\s*([\w]*)$/.test(linePrefix)) {
+                   targetFileNames = ['module_items.py', 'ID_items.py'];
+                   stripPrefix = 'itm_';
+               } else if (/p\.\s*([\w]*)$/.test(linePrefix)) {
+                   targetFileNames = ['module_parties.py', 'ID_parties.py'];
+                   stripPrefix = 'p_';
+               } else if (/mnu\.\s*([\w]*)$/.test(linePrefix)) {
+                   targetFileNames = ['module_game_menus.py', 'ID_menus.py'];
+                   stripPrefix = 'mnu_';
+               } else if (/fac\.\s*([\w]*)$/.test(linePrefix)) {
+                   targetFileNames = ['module_factions.py', 'ID_factions.py'];
+                   stripPrefix = 'fac_';
+               } else if (/scn\.\s*([\w]*)$/.test(linePrefix)) {
+                   targetFileNames = ['module_scenes.py', 'ID_scenes.py'];
+                   stripPrefix = 'scn_';
+               } else if (/qst\.\s*([\w]*)$/.test(linePrefix)) {
+                   targetFileNames = ['module_quests.py', 'ID_quests.py'];
+                   stripPrefix = 'qst_';
+               } else if (/snd\.\s*([\w]*)$/.test(linePrefix)) {
+                   targetFileNames = ['module_sounds.py', 'ID_sounds.py'];
+                   stripPrefix = 'snd_';
+               } else if (/prsnt\.\s*([\w]*)$/.test(linePrefix)) {
+                   targetFileNames = ['module_presentations.py', 'ID_presentations.py'];
+                   stripPrefix = 'prsnt_';
+               }
+
+               const files = getPythonFiles(rootPath, true);
+
+               for (const filePath of files) {
+                   const fileName = path.basename(filePath);
+                   
+                   if (targetFileNames.length > 0) {
+                       if (!targetFileNames.includes(fileName)) continue;
+                   } else {
+                       const isConstantFile = fileName === 'module_constants.py' || fileName.startsWith('ID_');
+                       if (!isConstantFile) continue;
+                   }
+
+                   try {
+                       let content = fileCache.get(filePath);
+                       if (!content) {
+                           content = fs.readFileSync(filePath, 'utf-8');
+                           fileCache.set(filePath, content);
+                       }
+
+                       const lines = content.split(/\r?\n/);
+                       for (let i = 0; i < lines.length; i++) {
+                           const line = lines[i];
+                           const trimmed = line.trim();
+                           if (trimmed.startsWith('#')) continue;
+
+                           let match = null;
+                           if (fileName === 'module_game_menus.py') {
+                               const menuMatch = trimmed.match(/['"]([a-zA-Z0-9_]+)['"]\s*,/);
+                               if (menuMatch && menuMatch[1]) {
+                                   let nextLine = (i + 1 < lines.length) ? lines[i + 1].trim() : '';
+                                   let combined = trimmed + ' ' + nextLine;
+                                   if (/['"][\w_]+['"]\s*,\s*\[/.test(combined) || nextLine.startsWith('[')) {
+                                       continue;
                                    }
-                                   return completions;
+                                   match = menuMatch;
                                }
-
-                               // Автокомплит глобальных переменных (срабатывает строго при вводе g.)
-                               const isGlobal = /g\.\s*[\w]*$/.test(linePrefix);
-                               if (isGlobal) {
-                                   const globalVars = getAllGlobalVariables(rootPath);
-                                   for (const gVar of globalVars) {
-                                       if (!seen.has(gVar)) {
-                                           seen.add(gVar);
-                                           const item = new vscode.CompletionItem(gVar, vscode.CompletionItemKind.Variable);
-                                           item.detail = 'Global Variable';
-                                           completions.push(item);
-                                       }
-                                   }
-                                   return completions;
-                               }
-
-                               // Определяем целевой файл по префиксу сущности
-                               let targetFileNames = [];
-                               let stripPrefix = null;
-
-                               if (/script\.\s*([\w]*)$/.test(linePrefix)) {
-                                   targetFileNames = ['module_scripts.py'];
-                               } else if (/trp\.\s*([\w]*)$/.test(linePrefix)) {
-                                   targetFileNames = ['module_troops.py', 'ID_troops.py'];
-                                   stripPrefix = 'trp_';
-                               } else if (/itm\.\s*([\w]*)$/.test(linePrefix)) {
-                                   targetFileNames = ['module_items.py', 'ID_items.py'];
-                                   stripPrefix = 'itm_';
-                               } else if (/p\.\s*([\w]*)$/.test(linePrefix)) {
-                                   targetFileNames = ['module_parties.py', 'ID_parties.py'];
-                                   stripPrefix = 'p_';
-                               } else if (/mnu\.\s*([\w]*)$/.test(linePrefix)) {
-                                   targetFileNames = ['module_game_menus.py', 'ID_menus.py'];
-                                   stripPrefix = 'mnu_';
-                               } else if (/fac\.\s*([\w]*)$/.test(linePrefix)) {
-                                   targetFileNames = ['module_factions.py', 'ID_factions.py'];
-                                   stripPrefix = 'fac_';
-                               } else if (/scn\.\s*([\w]*)$/.test(linePrefix)) {
-                                   targetFileNames = ['module_scenes.py', 'ID_scenes.py'];
-                                   stripPrefix = 'scn_';
-                               } else if (/qst\.\s*([\w]*)$/.test(linePrefix)) {
-                                   targetFileNames = ['module_quests.py', 'ID_quests.py'];
-                                   stripPrefix = 'qst_';
-                               } else if (/snd\.\s*([\w]*)$/.test(linePrefix)) {
-                                   targetFileNames = ['module_sounds.py', 'ID_sounds.py'];
-                                   stripPrefix = 'snd_';
-                               } else if (/prsnt\.\s*([\w]*)$/.test(linePrefix)) {
-                                   targetFileNames = ['module_presentations.py', 'ID_presentations.py'];
-                                   stripPrefix = 'prsnt_';
-                               }
-
-                               const files = getPythonFiles(rootPath, true);
-
-                               for (const filePath of files) {
-                                   const fileName = path.basename(filePath);
-
-                                   if (targetFileNames.length > 0) {
-                                       if (!targetFileNames.includes(fileName)) continue;
-                                   } else {
-                                       const isConstantFile = fileName === 'module_constants.py' || fileName.startsWith('ID_');
-                                       if (!isConstantFile) continue;
-                                   }
-
-                                   try {
-                                       let content = fileCache.get(filePath);
-                                       if (!content) {
-                                           content = fs.readFileSync(filePath, 'utf-8');
-                                           fileCache.set(filePath, content);
-                                       }
-
-                                       const lines = content.split(/\r?\n/);
-                                       for (let i = 0; i < lines.length; i++) {
-                                           const line = lines[i];
-                                           const trimmed = line.trim();
-                                           if (trimmed.startsWith('#')) continue;
-
-                                           let match = null;
-                                           if (fileName === 'module_game_menus.py') {
-                                               const menuMatch = trimmed.match(/['"]([a-zA-Z0-9_]+)['"]\s*,/);
-                                               if (menuMatch && menuMatch[1]) {
-                                                   let nextLine = (i + 1 < lines.length) ? lines[i + 1].trim() : '';
-                                                   let combined = trimmed + ' ' + nextLine;
-                                                   if (/['"][\w_]+['"]\s*,\s*\[/.test(combined) || nextLine.startsWith('[')) {
-                                                       continue;
-                                                   }
-                                                   match = menuMatch;
-                                               }
-                                           } else {
-                                               match = trimmed.match(/^[\(\[]\s*['"]([a-zA-Z0-9_]+)['"]\s*,/) || trimmed.match(/^([a-zA-Z0-9_]+)\s*=/);
-                                           }
-
-                                           if (match && match[1]) {
-                                               let name = match[1];
-
-                                               // Если включено срезание префикса (например, p_town_1 -> town_1)
-                                               if (stripPrefix && name.startsWith(stripPrefix)) {
-                                                   name = name.substring(stripPrefix.length);
-                                               }
-
-                                               if (!seen.has(name)) {
-                                                   seen.add(name);
-                                                   const kind = targetFileNames.length > 0 ? vscode.CompletionItemKind.Reference : vscode.CompletionItemKind.Constant;
-                                                   completions.push(new vscode.CompletionItem(name, kind));
-                                               }
-                                           }
-                                       }
-                                   } catch (e) {}
-                               }
-
-                               return completions;
+                           } else {
+                               match = trimmed.match(/^[\(\[]\s*['"]([a-zA-Z0-9_]+)['"]\s*,/) || trimmed.match(/^([a-zA-Z0-9_]+)\s*=/);
                            }
-                       }, '.', ':', '"', "'", '_', 'g');
 
-                                               // 3. Провайдер навигации по секциям (Outline / Go to Symbol)
-                                               const documentSymbolProvider = vscode.languages.registerDocumentSymbolProvider('python', {
-                                                   provideDocumentSymbols(document, token) {
-                                                       const fileName = path.basename(document.uri.fsPath);
-                                                       const symbols = [];
-                                                       const text = document.getText();
-                                                       const lines = text.split(/\r?\n/);
+                           if (match && match[1]) {
+                               let name = match[1];
+                               
+                               if (stripPrefix && name.startsWith(stripPrefix)) {
+                                   name = name.substring(stripPrefix.length);
+                               }
 
-                                                       let currentSection = null;
-                                                       let detailName = 'Section';
-                                                       let symbolKind = vscode.SymbolKind.Namespace;
+                               if (!seen.has(name)) {
+                                   seen.add(name);
+                                   const kind = targetFileNames.length > 0 ? vscode.CompletionItemKind.Reference : vscode.CompletionItemKind.Constant;
+                                   completions.push(new vscode.CompletionItem(name, kind));
+                               }
+                           }
+                       }
+                   } catch (e) {}
+               }
 
-                                                       if (fileName === 'module_scripts.py') {
-                                                           detailName = 'Script Block';
-                                                       } else if (fileName === 'module_game_menus.py') {
-                                                           detailName = 'Menu Section';
-                                                       } else if (fileName === 'module_dialogs.py') {
-                                                           detailName = 'Dialog Group';
-                                                       }
+               return completions;
+           }
+       }, '.', ':', '"', "'", '_', 'g');
 
-                                                       for (let i = 0; i < lines.length; i++) {
-                                                           const line = lines[i];
+       // 3. Провайдер навигации по секциям (Outline / Go to Symbol)
+       const documentSymbolProvider = vscode.languages.registerDocumentSymbolProvider('python', {
+           provideDocumentSymbols(document, token) {
+               const fileName = path.basename(document.uri.fsPath);
+               const symbols = [];
+               const text = document.getText();
+               const lines = text.split(/\r?\n/);
 
-                                                           const sectionMatch = line.match(/^#\s*---?\s*SECTION:\s*(.+?)\s*-*$/i);
-                                                           if (sectionMatch) {
-                                                               const title = sectionMatch[1].trim();
-                                                               const range = new vscode.Range(i, 0, i, line.length);
+               let currentSection = null;
+               let detailName = 'Section';
+               let symbolKind = vscode.SymbolKind.Namespace;
 
-                                                               currentSection = new vscode.DocumentSymbol(
-                                                                   title,
-                                                                   detailName,
-                                                                   symbolKind,
-                                                                   range,
-                                                                   range
-                                                               );
-                                                               symbols.push(currentSection);
-                                                               continue;
-                                                           }
+               if (fileName === 'module_scripts.py') {
+                   detailName = 'Script Block';
+               } else if (fileName === 'module_game_menus.py') {
+                   detailName = 'Menu Section';
+               } else if (fileName === 'module_dialogs.py') {
+                   detailName = 'Dialog Group';
+               }
 
-                                                           const subSectionMatch = line.match(/^#\s*--\s*Sub-section:\s*(.+)$/i);
-                                                           if (subSectionMatch) {
-                                                               const title = subSectionMatch[1].trim();
-                                                               const range = new vscode.Range(i, 0, i, line.length);
+               for (let i = 0; i < lines.length; i++) {
+                   const line = lines[i];
 
-                                                               const subSymbol = new vscode.DocumentSymbol(
-                                                                   title,
-                                                                   'Sub-section',
-                                                                   vscode.SymbolKind.Module,
-                                                                   range,
-                                                                   range
-                                                               );
+                   const sectionMatch = line.match(/^#\s*---?\s*SECTION:\s*(.+?)\s*-*$/i);
+                   if (sectionMatch) {
+                       const title = sectionMatch[1].trim();
+                       const range = new vscode.Range(i, 0, i, line.length);
+                       
+                       currentSection = new vscode.DocumentSymbol(
+                           title,
+                           detailName,
+                           symbolKind,
+                           range,
+                           range
+                       );
+                       symbols.push(currentSection);
+                       continue;
+                   }
 
-                                                               if (currentSection) {
-                                                                   currentSection.children.push(subSymbol);
-                                                               } else {
-                                                                   symbols.push(subSymbol);
-                                                               }
-                                                           }
-                                                       }
+                   const subSectionMatch = line.match(/^#\s*--\s*Sub-section:\s*(.+)$/i);
+                   if (subSectionMatch) {
+                       const title = subSectionMatch[1].trim();
+                       const range = new vscode.Range(i, 0, i, line.length);
+                       
+                       const subSymbol = new vscode.DocumentSymbol(
+                           title,
+                           'Sub-section',
+                           vscode.SymbolKind.Module,
+                           range,
+                           range
+                       );
 
-                                                       return symbols;
-                                                   }
-                                               });
+                       if (currentSection) {
+                           currentSection.children.push(subSymbol);
+                       } else {
+                           symbols.push(subSymbol);
+                       }
+                   }
+               }
 
-                                               context.subscriptions.push(definitionProvider, completionProvider, documentSymbolProvider);
+               return symbols;
+           }
+       });
+
+       context.subscriptions.push(definitionProvider, completionProvider, documentSymbolProvider);
    }
 
    function getLocalVariablesInCurrentScope(documentText, cursorLine) {
@@ -297,7 +333,7 @@
    function getAllGlobalVariables(rootPath) {
        const globals = new Set();
        const files = getPythonFiles(rootPath, true);
-       const regex = /(?:g\.|\$)([a-zA-Z_][a-zA-Z0-9_]*)\b/g;
+       const regex = /(?:\b(?:g_| \$g_|\$))([a-zA-Z_][a-zA-Z0-9_]*)\b/g;
 
        for (const filePath of files) {
            try {
@@ -309,7 +345,7 @@
                let match;
                while ((match = regex.exec(content)) !== null) {
                    const varName = match[1];
-                   if (!varName.match(/^(reg\d+|f\d+|s\d+|arg\d+)$/i)) {
+                   if (!varName.match(/^(reg\d+|f\d+|s\d+|arg\d+|towns|castles|villages)$/i)) {
                        globals.add(varName);
                    }
                }
@@ -323,8 +359,8 @@
        for (const file of files) {
            const filePath = path.join(dir, file);
            if (
-               filePath.includes('node_modules') ||
-               filePath.includes('.git') ||
+               filePath.includes('node_modules') || 
+               filePath.includes('.git') || 
                filePath.includes('build') ||
                filePath.endsWith('compiler.py') ||
                (!includeIDs && file.startsWith('ID_'))
