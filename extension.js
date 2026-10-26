@@ -171,6 +171,39 @@
                    return completions;
                }
 
+                // Сниппеты (раскрытие в try_begin/try_end и т.д.)
+                // НЕ срабатывают, если перед словом есть точка (контекст сущности: script., trp. и т.д.)
+                const snippetMap = {
+                    'try_begin': ['(try_begin),', '\t$0', '(try_end),'],
+                    'try_for_agents': ['(try_for_agents, l.agent_no),', '\t$1', '(try_end),$0'],
+                    'try_for_parties': ['(try_for_parties, l.party_no),', '\t$1', '(try_end),$0'],
+                    'try_for_range': ['(try_for_range, ${1:unused}, ${2:_begin}, ${3:_end}),', '\t$4', '(try_end),$0'],
+                    'try_for_range_backwards': ['(try_for_range_backwards, ${1:unused}, ${2:_begin}, ${3:_end}),', '\t$4', '(try_end),$0'],
+                };
+                const snippetPrefixes = Object.keys(snippetMap);
+                const hasDotBeforeWord = /\.\s*\w*$/.test(linePrefix);
+                const snippetWordMatch = hasDotBeforeWord ? null : linePrefix.match(/([a-zA-Z_][a-zA-Z0-9_]*)$/);
+                const snippetFilter = snippetWordMatch ? snippetWordMatch[1] : '';
+                let snippetAdded = false;
+                if (snippetFilter.length > 0) {
+                    for (const p of snippetPrefixes) {
+                        if (p.toLowerCase().startsWith(snippetFilter.toLowerCase())) {
+                            const body = snippetMap[p];
+                            const item = new vscode.CompletionItem(p, vscode.CompletionItemKind.Snippet);
+                            item.insertText = new vscode.SnippetString(body.join('\n'));
+                            item.detail = 'Snippet';
+                            item.range = new vscode.Range(position.line, position.character - snippetFilter.length, position.line, position.character);
+                            if (!seen.has(p)) {
+                                seen.add(p);
+                                completions.push(item);
+                                snippetAdded = true;
+                            }
+                        }
+                    }
+                    // Не делаем return, чтобы обычные операции тоже добавились
+                }
+
+
 
                // Определяем целевой файл по префиксу сущности
                let targetFileNames = [];
@@ -244,8 +277,16 @@
                     const opFilter = opWordMatch ? opWordMatch[1] : '';
                     if (opFilter.length > 0) {
                         const operations = getOperations(rootPath);
+                        const customOps = getWreckCustomOperations(rootPath);
+                        // Объединяем обычные операции с кастомными WRECK
+                        const allOps = new Map(operations);
+                        for (const [name, info] of customOps) {
+                            allOps.set(name, info);
+                        }
                         const startChar = position.character - opFilter.length;
-                        for (const [name, info] of operations) {
+                        for (const [name, info] of allOps) {
+                            // Пропускаем операции, для которых есть сниппет (они раскрываются отдельно)
+                            if (snippetPrefixes.includes(name)) continue;
                             if (name.toLowerCase().startsWith(opFilter.toLowerCase())) {
                                 let item;
                                 if (info.args && info.args.length > 0) {
@@ -335,7 +376,7 @@
 
                return completions;
            }
-       });
+       }, '.', ':', '"', "'", '_', 'g', 'a', 'b', 'c', 'd', 'e', 'f', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', 'A', 'B', 'C', 'D', 'E', 'F', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9');
 
        // 3. Провайдер навигации по секциям (Outline / Go to Symbol)
        const documentSymbolProvider = vscode.languages.registerDocumentSymbolProvider('python', {
@@ -483,7 +524,47 @@
        return operations;
    }
 
-   function getPythonFiles(dir, includeIDs = false, fileList = []) {
+
+    function getWreckCustomOperations(rootPath) {
+        const operations = new Map();
+        const files = getPythonFiles(rootPath, true);
+        // Ищем extend_syntax(...) в plugin_*.py файлах
+        // Формат: extend_syntax(ui_create_mesh)         # (ui_create_mesh, <destination>, <mesh>, <x>, <y>, [<scale_x>], [<scale_y>], [<color>]),
+        const extendRegex = /extend_syntax\s*\(\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\)\s*#\s*\(([^)]*)\)/;
+        for (const filePath of files) {
+            const fileName = path.basename(filePath);
+            if (!fileName.startsWith('plugin_') || !fileName.endsWith('.py')) continue;
+            try {
+                let content = fileCache.get(filePath);
+                if (!content) {
+                    content = fs.readFileSync(filePath, 'utf-8');
+                    fileCache.set(filePath, content);
+                }
+                const lines = content.split(/\r?\n/);
+                for (const line of lines) {
+                    const trimmed = line.trim();
+                    if (trimmed.startsWith('#')) continue;
+                    const match = trimmed.match(extendRegex);
+                    if (!match) continue;
+                    const name = match[1];
+                    const argsStr = match[2];
+                    const parts = argsStr.split(',');
+                    const args = [];
+                    for (let i = 1; i < parts.length; i++) {
+                        let arg = parts[i].trim();
+                        const pipeIdx = arg.indexOf('|');
+                        if (pipeIdx >= 0) arg = arg.substring(pipeIdx + 1);
+                        const argNameMatch = arg.match(/[a-zA-Z_][a-zA-Z0-9_]*/);
+                        if (argNameMatch) args.push(argNameMatch[0]);
+                    }
+                    operations.set(name, { args });
+                }
+            } catch (e) {}
+        }
+        return operations;
+    }
+
+    function getPythonFiles(dir, includeIDs = false, fileList = []) {
        const files = fs.readdirSync(dir);
        for (const file of files) {
            const filePath = path.join(dir, file);
