@@ -28,26 +28,46 @@
                const textBeforeWord = lineText.substring(0, range.start.character);
                let targetFileNames = [];
 
-               if (/script\.\s*$/i.test(textBeforeWord)) {
-                   targetFileNames = ['module_scripts.py', 'ID_scripts.py'];
-               } else if (/trp\.\s*$/i.test(textBeforeWord)) {
-                   targetFileNames = ['module_troops.py', 'ID_troops.py'];
-               } else if (/itm\.\s*$/i.test(textBeforeWord)) {
-                   targetFileNames = ['module_items.py', 'ID_items.py'];
-               } else if (/p\.\s*$/i.test(textBeforeWord)) {
-                   targetFileNames = ['module_parties.py', 'ID_parties.py'];
-               } else if (/mnu\.\s*$/i.test(textBeforeWord)) {
-                   targetFileNames = ['module_game_menus.py', 'ID_menus.py'];
-               } else if (/fac\.\s*$/i.test(textBeforeWord)) {
-                   targetFileNames = ['module_factions.py', 'ID_factions.py'];
-               } else if (/scn\.\s*$/i.test(textBeforeWord)) {
-                   targetFileNames = ['module_scenes.py', 'ID_scenes.py'];
-               } else if (/qst\.\s*$/i.test(textBeforeWord)) {
-                   targetFileNames = ['module_quests.py', 'ID_quests.py'];
-               } else if (/snd\.\s*$/i.test(textBeforeWord)) {
-                   targetFileNames = ['module_sounds.py', 'ID_sounds.py'];
-               } else if (/prsnt\.\s*$/i.test(textBeforeWord)) {
-                   targetFileNames = ['module_presentations.py', 'ID_presentations.py'];
+               const entityPrefixes = [
+                   ['script', ['module_scripts.py', 'ID_scripts.py']],
+                   ['trp', ['module_troops.py', 'ID_troops.py']],
+                   ['itm', ['module_items.py', 'ID_items.py']],
+                   ['p', ['module_parties.py', 'ID_parties.py']],
+                   ['mnu', ['module_game_menus.py', 'ID_menus.py']],
+                   ['fac', ['module_factions.py', 'ID_factions.py']],
+                   ['scn', ['module_scenes.py', 'ID_scenes.py']],
+                   ['qst', ['module_quests.py', 'ID_quests.py']],
+                   ['snd', ['module_sounds.py', 'ID_sounds.py']],
+                   ['prsnt', ['module_presentations.py', 'ID_presentations.py']],
+                   ['skl', ['module_skills.py', 'ID_skills.py']],
+                   ['anim', ['module_animations.py', 'ID_animations.py']],
+                   ['mesh', ['module_meshes.py', 'ID_meshes.py']],
+                   ['pt', ['module_party_templates.py', 'ID_party_templates.py']],
+                   ['spr', ['module_scene_props.py', 'ID_scene_props.py']],
+                   ['tableau', ['module_tableau_materials.py', 'ID_tableau_materials.py']],
+                   ['icon', ['module_map_icons.py', 'ID_map_icons.py']],
+                   ['mt', ['module_mission_templates.py', 'ID_mission_templates.py']],
+                   ['track', ['module_music.py', 'ID_music.py']],
+                   ['psys', ['module_particle_systems.py', 'ID_particle_systems.py']],
+                   ['ip', ['module_info_pages.py', 'ID_info_pages.py']],
+                   ['s', ['module_strings.py', 'ID_strings.py']],
+               ];
+               for (const [prefix, files] of entityPrefixes) {
+                   if (new RegExp('(?:^|[^a-zA-Z0-9_])' + prefix + '\\.\\s*$', 'i').test(textBeforeWord)) {
+                       targetFileNames = files;
+                       break;
+                   }
+               }
+
+               // Также ищем в соответствующих pbod_* файлах (module_X.py → pbod_X.py),
+               // чтобы переход к определению работал для скриптов/сущностей из pbod-режимов
+               if (targetFileNames.length > 0) {
+                   for (const fileName of targetFileNames.slice()) {
+                       const pbodName = fileName.replace(/^module_/, 'pbod_');
+                       if (pbodName !== fileName && !targetFileNames.includes(pbodName)) {
+                           targetFileNames.push(pbodName);
+                       }
+                   }
                }
 
                const files = getPythonFiles(rootPath, true);
@@ -116,8 +136,8 @@
                const seen = new Set();
                const rootPath = workspaceFolders[0].uri.fsPath;
 
-               // Автокомплит локальных переменных (l. или :)
-               const isLocal = /(?:l\.|:)\s*[\w]*$/.test(linePrefix);
+                // Автокомплит локальных переменных (l. или :)
+                const isLocal = /(?:^|[^a-zA-Z0-9_])(?:l\.|:)\s*[\w]*$/.test(linePrefix);
                if (isLocal) {
                    const localVars = getLocalVariablesInCurrentScope(document.getText(), position.line);
                    for (const v of localVars) {
@@ -131,8 +151,8 @@
                    return completions;
                }
 
-               // Автокомплит глобальных переменных (срабатывает строго при вводе g.)
-               const isGlobal = /g\.\s*[\w]*$/.test(linePrefix);
+                // Автокомплит глобальных переменных (срабатывает строго при вводе g.)
+                const isGlobal = /(?:^|[^a-zA-Z0-9_])g\.\s*[\w]*$/.test(linePrefix);
                if (isGlobal) {
                    const globalVars = getAllGlobalVariables(rootPath);
                    for (const gVar of globalVars) {
@@ -151,52 +171,115 @@
                    return completions;
                }
 
+
                // Определяем целевой файл по префиксу сущности
                let targetFileNames = [];
                let stripPrefix = null;
 
-               if (/script\.\s*([\w]*)$/.test(linePrefix)) {
-                   targetFileNames = ['module_scripts.py'];
-               } else if (/trp\.\s*([\w]*)$/.test(linePrefix)) {
-                   targetFileNames = ['module_troops.py', 'ID_troops.py'];
-                   stripPrefix = 'trp_';
-               } else if (/itm\.\s*([\w]*)$/.test(linePrefix)) {
-                   targetFileNames = ['module_items.py', 'ID_items.py'];
-                   stripPrefix = 'itm_';
-               } else if (/p\.\s*([\w]*)$/.test(linePrefix)) {
-                   targetFileNames = ['module_parties.py', 'ID_parties.py'];
-                   stripPrefix = 'p_';
-               } else if (/mnu\.\s*([\w]*)$/.test(linePrefix)) {
-                   targetFileNames = ['module_game_menus.py', 'ID_menus.py'];
-                   stripPrefix = 'mnu_';
-               } else if (/fac\.\s*([\w]*)$/.test(linePrefix)) {
-                   targetFileNames = ['module_factions.py', 'ID_factions.py'];
-                   stripPrefix = 'fac_';
-               } else if (/scn\.\s*([\w]*)$/.test(linePrefix)) {
-                   targetFileNames = ['module_scenes.py', 'ID_scenes.py'];
-                   stripPrefix = 'scn_';
-               } else if (/qst\.\s*([\w]*)$/.test(linePrefix)) {
-                   targetFileNames = ['module_quests.py', 'ID_quests.py'];
-                   stripPrefix = 'qst_';
-               } else if (/snd\.\s*([\w]*)$/.test(linePrefix)) {
-                   targetFileNames = ['module_sounds.py', 'ID_sounds.py'];
-                   stripPrefix = 'snd_';
-               } else if (/prsnt\.\s*([\w]*)$/.test(linePrefix)) {
-                   targetFileNames = ['module_presentations.py', 'ID_presentations.py'];
-                   stripPrefix = 'prsnt_';
+               const entityPrefixes = [
+                   ['script', ['module_scripts.py'], null],
+                   ['trp', ['module_troops.py', 'ID_troops.py'], 'trp_'],
+                   ['itm', ['module_items.py', 'ID_items.py'], 'itm_'],
+                   ['p', ['module_parties.py', 'ID_parties.py'], 'p_'],
+                   ['mnu', ['module_game_menus.py', 'ID_menus.py'], 'mnu_'],
+                   ['fac', ['module_factions.py', 'ID_factions.py'], 'fac_'],
+                   ['scn', ['module_scenes.py', 'ID_scenes.py'], 'scn_'],
+                   ['qst', ['module_quests.py', 'ID_quests.py'], 'qst_'],
+                   ['snd', ['module_sounds.py', 'ID_sounds.py'], 'snd_'],
+                   ['prsnt', ['module_presentations.py', 'ID_presentations.py'], 'prsnt_'],
+                   ['skl', ['module_skills.py', 'ID_skills.py'], 'skl_'],
+                   ['anim', ['module_animations.py', 'ID_animations.py'], 'anim_'],
+                   ['mesh', ['module_meshes.py', 'ID_meshes.py'], 'mesh_'],
+                   ['pt', ['module_party_templates.py', 'ID_party_templates.py'], 'pt_'],
+                   ['spr', ['module_scene_props.py', 'ID_scene_props.py'], 'spr_'],
+                   ['tableau', ['module_tableau_materials.py', 'ID_tableau_materials.py'], 'tableau_'],
+                   ['icon', ['module_map_icons.py', 'ID_map_icons.py'], 'icon_'],
+                   ['mt', ['module_mission_templates.py', 'ID_mission_templates.py'], 'mt_'],
+                   ['track', ['module_music.py', 'ID_music.py'], 'track_'],
+                   ['psys', ['module_particle_systems.py', 'ID_particle_systems.py'], 'psys_'],
+                   ['ip', ['module_info_pages.py', 'ID_info_pages.py'], 'ip_'],
+                   ['s', ['module_strings.py', 'ID_strings.py'], 'str_'],
+               ];
+               for (const [prefix, files, strip] of entityPrefixes) {
+                   if (new RegExp('(?:^|[^a-zA-Z0-9_])' + prefix + '\\.\\s*[\\w]*$').test(linePrefix)) {
+                       targetFileNames = files;
+                       stripPrefix = strip;
+                       break;
+                   }
                }
+
+               // Также ищем в соответствующих pbod_* файлах (module_X.py → pbod_X.py),
+               // чтобы подсказки работали для скриптов/сущностей из pbod-режимов
+               // (pbod_scripts, pbod_items, pbod_troops и т.д.)
+               if (targetFileNames.length > 0) {
+                   for (const fileName of targetFileNames.slice()) {
+                       const pbodName = fileName.replace(/^module_/, 'pbod_');
+                       if (pbodName !== fileName && !targetFileNames.includes(pbodName)) {
+                           targetFileNames.push(pbodName);
+                       }
+                   }
+               }
+
+                // Неизвестный префикс вида "foo." — не подсказывать всё подряд
+                if (targetFileNames.length === 0 && /[a-zA-Z_][a-zA-Z0-9_]*\.\s*[\w]*$/.test(linePrefix)) {
+                    return [];
+                }
+
+                // Встроенные регистры (reg0, s1, pos2, arg3, ...) — константы не подсказывать
+                if (targetFileNames.length === 0) {
+                    const wordMatch = /[a-zA-Z_][a-zA-Z0-9_]*$/.exec(linePrefix);
+                    const currentWord = wordMatch ? wordMatch[0] : '';
+                    if (/^(reg|s|pos|arg|i|f)\d+$/.test(currentWord)) {
+                        return [];
+                    }
+                }
+
+                // Автокомплит операций из header_operations.py
+                // Срабатывает при вводе части имени операции (например, store_add)
+                // без необходимости писать скобку (
+                // НЕ срабатывает, если используется известный префикс сущности (script., trp. и т.д.)
+                const isKnownEntityPrefix = /(?:^|[^a-zA-Z0-9_])(?:l\.|g\.|script|trp|itm|p|mnu|fac|scn|qst|snd|prsnt|skl|anim|mesh|pt|spr|tableau|icon|mt|track|psys|ip|s)\.\s*[\w]*$/.test(linePrefix);
+                if (!isKnownEntityPrefix && targetFileNames.length === 0) {
+                    const opWordMatch = linePrefix.match(/([a-zA-Z_][a-zA-Z0-9_]*)$/);
+                    const opFilter = opWordMatch ? opWordMatch[1] : '';
+                    if (opFilter.length > 0) {
+                        const operations = getOperations(rootPath);
+                        const startChar = position.character - opFilter.length;
+                        for (const [name, info] of operations) {
+                            if (name.toLowerCase().startsWith(opFilter.toLowerCase())) {
+                                let item;
+                                if (info.args && info.args.length > 0) {
+                                    const params = info.args.map((arg, i) => '${' + (i + 1) + ':' + arg + '}').join(', ');
+                                    item = new vscode.CompletionItem(name, vscode.CompletionItemKind.Method);
+                                    item.insertText = new vscode.SnippetString('(' + name + ', ' + params + ')');
+                                } else {
+                                    item = new vscode.CompletionItem(name, vscode.CompletionItemKind.Method);
+                                    item.insertText = new vscode.SnippetString('(' + name + ')');
+                                }
+                                item.detail = 'Operation';
+                                item.range = new vscode.Range(position.line, startChar, position.line, position.character);
+                                if (!seen.has(name)) {
+                                    seen.add(name);
+                                    completions.push(item);
+                                }
+                            }
+                        }
+                        return completions;
+                    }
+                }
+
 
                const files = getPythonFiles(rootPath, true);
 
                for (const filePath of files) {
                    const fileName = path.basename(filePath);
+                   const isPluginFile = fileName.startsWith('plugin_') && fileName.endsWith('.py');
                    
                    if (targetFileNames.length > 0) {
                        if (!targetFileNames.includes(fileName)) continue;
-                   } else {
-                       const isConstantFile = fileName === 'module_constants.py' || fileName.startsWith('ID_');
-                       if (!isConstantFile) continue;
-                   }
+                    } else {
+                        if (fileName !== 'module_constants.py' && !isPluginFile) continue;
+                    }
 
                    try {
                        let content = fileCache.get(filePath);
@@ -222,6 +305,8 @@
                                    }
                                    match = menuMatch;
                                }
+                           } else if (isPluginFile) {
+                               match = trimmed.match(/^def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/);
                            } else {
                                match = trimmed.match(/^[\(\[]\s*['"]([a-zA-Z0-9_]+)['"]\s*,/) || trimmed.match(/^([a-zA-Z0-9_]+)\s*=/);
                            }
@@ -235,7 +320,12 @@
 
                                if (!seen.has(name)) {
                                    seen.add(name);
-                                   const kind = targetFileNames.length > 0 ? vscode.CompletionItemKind.Reference : vscode.CompletionItemKind.Constant;
+                                   let kind;
+                                   if (isPluginFile) {
+                                       kind = vscode.CompletionItemKind.Function;
+                                   } else {
+                                       kind = targetFileNames.length > 0 ? vscode.CompletionItemKind.Reference : vscode.CompletionItemKind.Constant;
+                                   }
                                    completions.push(new vscode.CompletionItem(name, kind));
                                }
                            }
@@ -245,7 +335,7 @@
 
                return completions;
            }
-       }, '.', ':', '"', "'", '_', 'g');
+       });
 
        // 3. Провайдер навигации по секциям (Outline / Go to Symbol)
        const documentSymbolProvider = vscode.languages.registerDocumentSymbolProvider('python', {
@@ -333,7 +423,7 @@
    function getAllGlobalVariables(rootPath) {
        const globals = new Set();
        const files = getPythonFiles(rootPath, true);
-       const regex = /(?:\b(?:g_| \$g_|\$))([a-zA-Z_][a-zA-Z0-9_]*)\b/g;
+        const regex = /(?:\b(?:g\.|g_|\$g_|\$))([a-zA-Z_][a-zA-Z0-9_]*)\b/g;
 
        for (const filePath of files) {
            try {
@@ -352,6 +442,45 @@
            } catch (e) {}
        }
        return Array.from(globals);
+   }
+
+   function getOperations(rootPath) {
+       const operations = new Map();
+       const files = getPythonFiles(rootPath, true);
+       const defRegex = /^([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*[^#]*#\s*\(([^)]*)\)/;
+       for (const filePath of files) {
+           const fileName = path.basename(filePath);
+           if (fileName !== 'header_operations.py') continue;
+           try {
+               let content = fileCache.get(filePath);
+               if (!content) {
+                   content = fs.readFileSync(filePath, 'utf-8');
+                   fileCache.set(filePath, content);
+               }
+               const lines = content.split(/\r?\n/);
+               for (const line of lines) {
+                   const trimmed = line.trim();
+                   if (trimmed.startsWith('#')) continue;
+                   const match = trimmed.match(defRegex);
+                   if (!match) continue;
+                   const name = match[1];
+                   const argsStr = match[2];
+                   const parts = argsStr.split(',');
+                   const args = [];
+                   for (let i = 1; i < parts.length; i++) {
+                       let arg = parts[i].trim();
+                       // Если есть "|", берём часть после него (для модификаторов типа neg|<op>)
+                       const pipeIdx = arg.indexOf('|');
+                       if (pipeIdx >= 0) arg = arg.substring(pipeIdx + 1);
+                       // Извлекаем первое валидное имя аргумента (слово из букв, цифр, _
+                       const argNameMatch = arg.match(/[a-zA-Z_][a-zA-Z0-9_]*/);
+                       if (argNameMatch) args.push(argNameMatch[0]);
+                   }
+                   operations.set(name, { args });
+               }
+           } catch (e) {}
+       }
+       return operations;
    }
 
    function getPythonFiles(dir, includeIDs = false, fileList = []) {
