@@ -171,6 +171,17 @@
                    return completions;
                }
 
+                // Находимся ли курсор уже внутри открытой скобки "(...".
+                // Внутри скобок вставляем только имя операции (без повторных скобок
+                // и плейсхолдеров), снаружи — полный шаблон "(op, arg1, arg2)".
+                let parenDepth = 0;
+                for (let i = 0; i < linePrefix.length; i++) {
+                    const ch = linePrefix[i];
+                    if (ch === '(') parenDepth++;
+                    else if (ch === ')') parenDepth = Math.max(0, parenDepth - 1);
+                }
+                const isInsideParens = parenDepth > 0;
+
                 // Сниппеты (раскрытие в try_begin/try_end и т.д.)
                 // НЕ срабатывают, если перед словом есть точка (контекст сущности: script., trp. и т.д.)
                 const snippetMap = {
@@ -188,7 +199,11 @@
                 if (snippetFilter.length > 0) {
                     for (const p of snippetPrefixes) {
                         if (p.toLowerCase().startsWith(snippetFilter.toLowerCase())) {
-                            const body = snippetMap[p];
+                            let body = snippetMap[p];
+                            // Если скобка уже открыта пользователем — не дублируем её
+                            if (isInsideParens) {
+                                body = [body[0].replace(/^\(/, '')].concat(body.slice(1));
+                            }
                             const item = new vscode.CompletionItem(p, vscode.CompletionItemKind.Snippet);
                             item.insertText = new vscode.SnippetString(body.join('\n'));
                             item.detail = 'Snippet';
@@ -292,9 +307,10 @@
                                 let item;
                                 // Операторы-модификаторы без скобок (bitwise флаги)
                                 const noParenOps = ['neg', 'this_or_next'];
-                                if (noParenOps.includes(name)) {
+                                if (noParenOps.includes(name) || isInsideParens) {
+                                    // Внутри уже открытой скобки вставляем только имя операции
                                     item = new vscode.CompletionItem(name, vscode.CompletionItemKind.Method);
-                                    item.insertText = name; // без скобок
+                                    item.insertText = name; // без скобок и параметров
                                 } else if (info.args && info.args.length > 0) {
                                     const params = info.args.map((arg, i) => '${' + (i + 1) + ':' + arg + '}').join(', ');
                                     item = new vscode.CompletionItem(name, vscode.CompletionItemKind.Method);
