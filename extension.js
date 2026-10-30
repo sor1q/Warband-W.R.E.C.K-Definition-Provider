@@ -284,12 +284,18 @@
                             allOps.set(name, info);
                         }
                         const startChar = position.character - opFilter.length;
+                        let opsAdded = false;
                         for (const [name, info] of allOps) {
                             // Пропускаем операции, для которых есть сниппет (они раскрываются отдельно)
                             if (snippetPrefixes.includes(name)) continue;
                             if (name.toLowerCase().startsWith(opFilter.toLowerCase())) {
                                 let item;
-                                if (info.args && info.args.length > 0) {
+                                // Операторы-модификаторы без скобок (bitwise флаги)
+                                const noParenOps = ['neg', 'this_or_next'];
+                                if (noParenOps.includes(name)) {
+                                    item = new vscode.CompletionItem(name, vscode.CompletionItemKind.Method);
+                                    item.insertText = name; // без скобок
+                                } else if (info.args && info.args.length > 0) {
                                     const params = info.args.map((arg, i) => '${' + (i + 1) + ':' + arg + '}').join(', ');
                                     item = new vscode.CompletionItem(name, vscode.CompletionItemKind.Method);
                                     item.insertText = new vscode.SnippetString('(' + name + ', ' + params + ')');
@@ -302,10 +308,11 @@
                                 if (!seen.has(name)) {
                                     seen.add(name);
                                     completions.push(item);
+                                    opsAdded = true;
                                 }
                             }
                         }
-                        return completions;
+                        if (opsAdded) return completions;
                     }
                 }
 
